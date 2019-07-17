@@ -45,7 +45,7 @@ async.parallel(
     app.post('/subscription', (req, res) => {
         if(!req.client) return res.status(401).send('client not found')
         const issuer = req.client.issuer
-        const identifier = req.user[req.client.identifier]
+        const identifier = req.user.web_push_id
         if(!identifier) return res.status(400).send('identifier not found')
         const subscription = req.body
 
@@ -80,7 +80,7 @@ async.parallel(
                 .then(subscriptions => {
                     if(subscriptions.length === 0) return res.status(404).send('recipient not found')
 
-                    subscriptions.map(({ subscription }) => webpush.sendNotification(subscription, 'Your Push Payload Text'))
+                    subscriptions.map(({ subscription }) => webpush.sendNotification(subscription, JSON.stringify(payload)))
                     res.status(200).send()
                 })
                 .catch(err => res.status(500).send(err))
