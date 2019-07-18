@@ -51,11 +51,11 @@ async.parallel(
         const subscription = req.body
 
         mongodbClient.connect()
-            .then(client => {
-                client.db().collection('subscriptions').updateOne(
-                    { issuer, identifier, subscription },
-                    { $set: { issuer, identifier, subscription }},
-                    { upsert: true },
+        .then(client => {
+            client.db().collection(issuer).updateOne(
+                { ...subscription, identifier },
+                { $set: { ...subscription, identifier }},
+                { upsert: true },
                 )
                 .then(() => res.status(201).send())
                 .catch(err => res.status(500).send(err))
@@ -63,7 +63,7 @@ async.parallel(
             .catch(err => res.status(500).send('can\'t connect to db' + err))
     })
     
-    const getSubscriptions = (query, collection = 'subscriptions') => mongodbClient.connect().then(client => client.db().collection(collection).find( query ).toArray())
+    const getSubscriptions = (issuer, query = {} ) => mongodbClient.connect().then(client => client.db().collection(issuer).find( query ).toArray())
     
     const push = (subscription, payload) => webpush.sendNotification(subscription, JSON.stringify(payload))
     
@@ -76,10 +76,9 @@ async.parallel(
     app.post('/broadcast', (req, res) => {
         const payload = req.body.payload
         const issuer = req.client.issuer
-        const query = { issuer }
-        getSubscriptions(query)
+        getSubscriptions(issuer)
         .then(subscriptions => {
-            subscriptions.map(({ subscription }) => push(subscription, payload))
+            subscriptions.map(subscription => push(subscription, payload))
             res.status(200).send()
         })
         .catch(err => res.status(500).send(err))
@@ -92,8 +91,8 @@ async.parallel(
         if(recipients.length === 0) return res.status(400).send('field recipients or recipient required')
         
         const payload = req.body.payload
-        const query = { issuer: req.client.issuer, identifier: { $in: recipients }}
-        getSubscriptions(query)
+        const query = { identifier: { $in: recipients }}
+        getSubscriptions(issuer, query)
         .then(subscriptions => {
             if(req.body.recipient && subscriptions.length === 0) return res.status(404).send('recipient not found')
             subscriptions.map(({ subscription }) => push(subscription, payload))
