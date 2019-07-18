@@ -37,13 +37,14 @@ async.parallel(
     app.use(cors({ origin: config.express.cors_origin, allowedHeaders: [ 'Authorization', 'Content-Type' ] }))
 
     function putClient(req, res, next) {
-        req.client = getClient(req.user && req.user.iss)
+        const client = getClient(req.user && req.user.iss)
+        if(!client) return res.status(401).send('client not found')
+        req.client = client
         next()
     }
     app.use(putClient)
 
     app.post('/subscription', (req, res) => {
-        if(!req.client) return res.status(401).send('client not found')
         const issuer = req.client.issuer
         const identifier = req.user.web_push_id
         if(!identifier) return res.status(400).send('identifier not found')
@@ -61,34 +62,44 @@ async.parallel(
             })
             .catch(err => res.status(500).send('can\'t connect to db' + err))
     })
-
-    app.post('/push', (req, res) => {
-        if(!req.client) return res.status(401).send('client not found')
-        const issuer = req.client.issuer
+    
+    const getSubscriptions = (query, collection = 'subscriptions') => mongodbClient.connect().then(client => client.db().collection(collection).find( query ).toArray())
+    
+    const push = (subscription, payload) => webpush.sendNotification(subscription, JSON.stringify(payload))
+    
+    app.use(['/broadcast', '/push'], (req, res, next) => {
         if(!req.user.mayPush) return res.status(403).send('missing claim')
-
+        if(!req.body.payload) return res.status(400).send('field payload required')
+        next()
+    })
+    
+    app.post('/broadcast', (req, res) => {
+        const payload = req.body.payload
+        const issuer = req.client.issuer
+        const query = { issuer }
+        getSubscriptions(query)
+        .then(subscriptions => {
+            subscriptions.map(({ subscription }) => push(subscription, payload))
+            res.status(200).send()
+        })
+        .catch(err => res.status(500).send(err))
+    })
+    
+    app.post('/push', (req, res) => {
         let recipients = (req.body.recipients || [])
         if(!Array.isArray(recipients)) return res.status(400).send('recipients needs to be an array of identifiers')
         recipients = recipients.concat(req.body.recipient || [])
         if(recipients.length === 0) return res.status(400).send('field recipients or recipient required')
+        
         const payload = req.body.payload
-        if(!payload) return res.status(400).send('field payload required')
-
-        console.log(recipients)
-        const query = { issuer }
-        if(recipients.indexOf('all') < 0) query.identifier = { $in: recipients }
-        mongodbClient.connect()
-        .then(client => {
-            client.db().collection('subscriptions').find( query ).toArray()
-                .then(subscriptions => {
-                    if(req.body.recipient && subscriptions.length === 0) return res.status(404).send('recipient not found')
-
-                    subscriptions.map(({ subscription }) => webpush.sendNotification(subscription, JSON.stringify(payload)))
-                    res.status(200).send()
-                })
-                .catch(err => res.status(500).send(err))
+        const query = { issuer: req.client.issuer, identifier: { $in: recipients }}
+        getSubscriptions(query)
+        .then(subscriptions => {
+            if(req.body.recipient && subscriptions.length === 0) return res.status(404).send('recipient not found')
+            subscriptions.map(({ subscription }) => push(subscription, payload))
+            res.status(200).send()
         })
-        .catch(err => res.status(500).send('can\'t connect to db' + err))
+        .catch(err => res.status(500).send(err))
     })
 
     app.get('/vapid', (req, res) => {
