@@ -22,7 +22,7 @@ const request = require('request')
 async.parallel(
     config.clients.map(client => 
         cb => request(client.pub_key_url, (err, res, body) => {
-			if(err) cb(err)
+			if(err) cb(null, {})
 			else cb(null, {...client, key: body})
 		})
     )
@@ -67,18 +67,21 @@ async.parallel(
         const issuer = req.client.issuer
         if(!req.user.mayPush) return res.status(403).send('missing claim')
 
-        const recipient = req.body.recipient
-        if(!recipient) return res.status(400).send('field recipient required')
+        let recipients = (req.body.recipients || [])
+        if(!Array.isArray(recipients)) return res.status(400).send('recipients needs to be an array of identifiers')
+        recipients = recipients.concat(req.body.recipient || [])
+        if(recipients.length === 0) return res.status(400).send('field recipients or recipient required')
         const payload = req.body.payload
         if(!payload) return res.status(400).send('field payload required')
 
+        console.log(recipients)
         const query = { issuer }
-        if(recipient !== 'all') query.identifier = recipient
+        if(recipients.indexOf('all') < 0) query.identifier = { $in: recipients }
         mongodbClient.connect()
         .then(client => {
             client.db().collection('subscriptions').find( query ).toArray()
                 .then(subscriptions => {
-                    if(subscriptions.length === 0) return res.status(404).send('recipient not found')
+                    if(req.body.recipient && subscriptions.length === 0) return res.status(404).send('recipient not found')
 
                     subscriptions.map(({ subscription }) => webpush.sendNotification(subscription, JSON.stringify(payload)))
                     res.status(200).send()
