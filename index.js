@@ -52,7 +52,7 @@ async.parallel(
 
         mongodbClient.connect()
         .then(client => {
-            client.db().collection(issuer).updateOne(
+            client.db().collection(issuer.replace('http://', '')).updateOne(
                 { ...subscription, identifier },
                 { $set: { ...subscription, identifier }},
                 { upsert: true },
@@ -63,9 +63,14 @@ async.parallel(
             .catch(err => res.status(500).send('can\'t connect to db' + err))
     })
     
-    const getSubscriptions = (issuer, query = {} ) => mongodbClient.connect().then(client => client.db().collection(issuer).find( query ).toArray())
+    const getSubscriptions = (issuer, query = {} ) => mongodbClient.connect().then(client => client.db().collection(issuer.replace('http://', '')).find( query ).toArray())
     
-    const push = (subscription, payload) => webpush.sendNotification(subscription, JSON.stringify(payload))
+    const removeStaleSubscription = (issuer, subscription) => err => {
+        if([404, 410].indexOf(err.statusCode) < 0) return
+        mongodbClient.connect().then(client => client.db().collection(issuer.replace('http://', '')).deleteOne( subscription ))
+    }
+
+    const push = (issuer, subscription, payload) => webpush.sendNotification(subscription, JSON.stringify(payload)).catch(removeStaleSubscription(issuer, subscription))
     
     app.use(['/broadcast', '/push'], (req, res, next) => {
         if(!req.user.mayPush) return res.status(403).send('missing claim')
@@ -78,7 +83,7 @@ async.parallel(
         const issuer = req.client.issuer
         getSubscriptions(issuer)
         .then(subscriptions => {
-            subscriptions.map(subscription => push(subscription, payload))
+            subscriptions.map(subscription => push(issuer, subscription, payload))
             res.status(200).send()
         })
         .catch(err => res.status(500).send(err))
@@ -90,12 +95,13 @@ async.parallel(
         recipients = recipients.concat(req.body.recipient || [])
         if(recipients.length === 0) return res.status(400).send('field recipients or recipient required')
         
+        const issuer = req.client.issuer
         const payload = req.body.payload
         const query = { identifier: { $in: recipients }}
         getSubscriptions(issuer, query)
         .then(subscriptions => {
             if(req.body.recipient && subscriptions.length === 0) return res.status(404).send('recipient not found')
-            subscriptions.map(({ subscription }) => push(subscription, payload))
+            subscriptions.map(subscription => push(issuer, subscription, payload))
             res.status(200).send()
         })
         .catch(err => res.status(500).send(err))
