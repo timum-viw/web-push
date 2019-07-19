@@ -59,15 +59,26 @@ async.parallel(
                 )
                 .then(() => res.status(201).send())
                 .catch(err => res.status(500).send(err))
+                .finally( () => client.close() )
             })
             .catch(err => res.status(500).send('can\'t connect to db' + err))
     })
     
-    const getSubscriptions = (issuer, query = {} ) => mongodbClient.connect().then(client => client.db().collection(issuer.replace('http://', '')).find( query ).toArray())
+    const getSubscriptions = (issuer, query = {} ) => mongodbClient.connect()
+        .then(client => client.db()
+            .collection(issuer.replace('http://', ''))
+            .find( query ).toArray()
+            .finally( () => client.close() )
+        )
     
     const removeStaleSubscription = (issuer, subscription) => err => {
         if([404, 410].indexOf(err.statusCode) < 0) return
-        mongodbClient.connect().then(client => client.db().collection(issuer.replace('http://', '')).deleteOne( subscription ))
+        mongodbClient.connect()
+            .then(client => client.db()
+                .collection(issuer.replace('http://', ''))
+                .deleteOne( subscription )
+                .finally( () => client.close() )
+            )
     }
 
     const push = (issuer, subscription, payload) => webpush.sendNotification(subscription, JSON.stringify(payload)).catch(removeStaleSubscription(issuer, subscription))
