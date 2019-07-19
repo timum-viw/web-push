@@ -19,15 +19,16 @@ const cors = require('cors')
 const async = require('async')
 const request = require('request')
 
-async.parallel(
-    config.clients.map(client => 
+async.parallel([
+    cb => mongodbClient.connect().then( client => cb(null, client.db())),
+    ...config.clients.map(client => 
         cb => request(client.pub_key_url, (err, res, body) => {
-			if(err) cb(null, {})
-			else cb(null, {...client, key: body})
-		})
+            if(err) cb(null, {})
+            else cb(null, {...client, key: body})
+        })
     )
-)
-.then(clients => {
+])
+.then(([mongodb, ...clients]) => {
     const getClient = issuer => clients.find(c => c.issuer === issuer)
 
     const secret = (req, payload, done) => done(null, getClient(payload.iss) ? getClient(payload.iss).key : null)
@@ -50,35 +51,20 @@ async.parallel(
         if(!identifier) return res.status(400).send('identifier not found')
         const subscription = req.body
 
-        mongodbClient.connect()
-        .then(client => {
-            client.db().collection(issuer.replace('http://', '')).updateOne(
-                { ...subscription, identifier },
-                { $set: { ...subscription, identifier }},
-                { upsert: true },
-                )
-                .then(() => res.status(201).send())
-                .catch(err => res.status(500).send(err))
-                .finally( () => client.close() )
-            })
-            .catch(err => res.status(500).send('can\'t connect to db' + err))
+        mongodb.collection(issuer.replace('http://', '')).updateOne(
+            { ...subscription, identifier },
+            { $set: { ...subscription, identifier }},
+            { upsert: true },
+            )
+            .then(() => res.status(201).send())
+            .catch(err => res.status(500).send(err))
     })
     
-    const getSubscriptions = (issuer, query = {} ) => mongodbClient.connect()
-        .then(client => client.db()
-            .collection(issuer.replace('http://', ''))
-            .find( query ).toArray()
-            .finally( () => client.close() )
-        )
+    const getSubscriptions = (issuer, query = {} ) => mongodb.collection(issuer.replace('http://', '')).find( query ).toArray()
     
     const removeStaleSubscription = (issuer, subscription) => err => {
         if([404, 410].indexOf(err.statusCode) < 0) return
-        mongodbClient.connect()
-            .then(client => client.db()
-                .collection(issuer.replace('http://', ''))
-                .deleteOne( subscription )
-                .finally( () => client.close() )
-            )
+        mongodb.collection(issuer.replace('http://', '')).deleteOne( subscription )
     }
 
     const push = (issuer, subscription, payload) => webpush.sendNotification(subscription, JSON.stringify(payload)).catch(removeStaleSubscription(issuer, subscription))
