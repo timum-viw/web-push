@@ -39,7 +39,7 @@ async.parallel([
 
     function putClient(req, res, next) {
         const client = getClient(req.user && req.user.iss)
-        if(!client) return res.status(401).send('client not found')
+        if(!client) return res.status(401).send({error: 'client not found'})
         req.client = client
         next()
     }
@@ -48,7 +48,7 @@ async.parallel([
     app.post('/subscription', (req, res) => {
         const issuer = req.client.issuer
         const identifier = req.user.web_push_id
-        if(!identifier) return res.status(400).send('identifier not found')
+        if(!identifier) return res.status(400).send({error: 'identifier not found'})
         const subscription = req.body
 
         mongodb.collection(issuer.replace('http://', '')).updateOne(
@@ -57,7 +57,7 @@ async.parallel([
             { upsert: true },
             )
             .then(() => res.status(201).send())
-            .catch(err => res.status(500).send(err))
+            .catch(error => res.status(500).send({error}))
     })
     
     const getSubscriptions = (issuer, query = {} ) => mongodb.collection(issuer.replace('http://', '')).find( query ).toArray()
@@ -70,8 +70,8 @@ async.parallel([
     const push = (issuer, subscription, payload) => webpush.sendNotification(subscription, JSON.stringify(payload)).catch(removeStaleSubscription(issuer, subscription))
     
     app.use(['/broadcast', '/push'], (req, res, next) => {
-        if(!req.user.mayPush) return res.status(403).send('missing claim')
-        if(!req.body.payload) return res.status(400).send('field payload required')
+        if(!req.user.mayPush) return res.status(403).send({error: 'missing claim'})
+        if(!req.body.payload) return res.status(400).send({error: 'field payload required'})
         next()
     })
     
@@ -83,25 +83,25 @@ async.parallel([
             subscriptions.map(subscription => push(issuer, subscription, payload))
             res.status(200).send()
         })
-        .catch(err => res.status(500).send(err))
+        .catch(error => res.status(500).send({error}))
     })
     
     app.post('/push', (req, res) => {
         let recipients = (req.body.recipients || [])
-        if(!Array.isArray(recipients)) return res.status(400).send('recipients needs to be an array of identifiers')
+        if(!Array.isArray(recipients)) return res.status(400).send({error: 'recipients needs to be an array of identifiers'})
         recipients = recipients.concat(req.body.recipient || [])
-        if(recipients.length === 0) return res.status(400).send('field recipients or recipient required')
+        if(recipients.length === 0) return res.status(400).send({error: 'field recipients or recipient required'})
         
         const issuer = req.client.issuer
         const payload = req.body.payload
         const query = { identifier: { $in: recipients }}
         getSubscriptions(issuer, query)
         .then(subscriptions => {
-            if(req.body.recipient && subscriptions.length === 0) return res.status(404).send('recipient not found')
+            if(req.body.recipient && subscriptions.length === 0) return res.status(404).send({error: 'recipient not found'})
             subscriptions.map(subscription => push(issuer, subscription, payload))
             res.status(200).send()
         })
-        .catch(err => res.status(500).send(err))
+        .catch(error => res.status(500).send({error}))
     })
 
     app.get('/vapid', (req, res) => {
